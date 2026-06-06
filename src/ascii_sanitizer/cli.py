@@ -61,10 +61,11 @@ def main(
         else:
             sys.exit(0)
 
-    if fix and report.corrected_diagram:
+    if (fix or in_place) and report.corrected_diagram:
         if in_place and file and file != "-":
             with open(file, "w", encoding="utf-8") as f:
                 f.write(report.corrected_diagram)
+            click.echo(f"Fixed {len(report.issues)} issue(s) in '{file}'", err=True)
         else:
             click.echo(report.corrected_diagram)
         return
