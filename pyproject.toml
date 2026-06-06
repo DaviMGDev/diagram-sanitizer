@@ -1,0 +1,36 @@
+[project]
+name = "ascii-sanitizer"
+version = "0.1.0"
+description = "Validate and auto-fix structural errors in ASCII diagrams"
+readme = "README.md"
+authors = [
+    { name = "Davi Macêdo Gomes", email = "dev.davi.macedo.gomes@gmail.com" }
+]
+requires-python = ">=3.10"
+dependencies = ["click>=8"]
+
+[project.optional-dependencies]
+cli = ["wcwidth>=0.2"]
+
+[project.scripts]
+ascii-sanitize = "ascii_sanitizer.cli:main"
+
+[build-system]
+requires = ["uv_build>=0.11.7,<0.12.0"]
+build-backend = "uv_build"
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "W", "UP"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[dependency-groups]
+dev = [
+    "pytest>=8",
+    "ruff>=0.11",
+]
