@@ -20,6 +20,12 @@ between the Unicode box-drawing character set, and produces a structured JSON
 report with issue locations, severities, and fix suggestions. When a fix is
 unambiguous, it also returns the corrected diagram.
 
+A key responsibility is **orphan symbol detection**: identifying box-drawing,
+arrow, circle, or ASCII line characters that are completely disconnected from
+any other connector — meaning they are fragments of a broken arrow, a broken
+box wall, a broken line, or any other once-intact structure. These orphans are
+reported and, when unambiguous, removed from the corrected diagram.
+
 ---
 
 ## User Stories
@@ -59,6 +65,20 @@ unambiguous, it also returns the corrected diagram.
 - **AC-006:** WHEN an arrow head (`▶▼◀▲`) or circle (`●○`) has no line
   character in its expected pointing/connecting direction, THE system SHALL
   report a connectivity error.
+- **AC-013:** WHEN a connector has no adjacent connectors in any of its
+  expected directions (i.e., it is fully orphaned — not part of any connected
+  component larger than itself), THE system SHALL report it as an orphan issue
+  and SHALL remove it (replace with `U+0020 SPACE`) in `corrected_diagram`.
+- **AC-014:** WHEN a small isolated component (2–4 characters that are
+  connected to each other but not to any larger structure) is recognisable as
+  a fragment of a broken structure (e.g., a wall segment missing both ends, a
+  corner pair with no opposite corners, an arrow tail without a head), THE
+  system SHALL report each constituent connector as an orphan and SHALL remove
+  the entire orphan component in `corrected_diagram`.
+- **AC-015:** WHEN a diagram contains an arrow head pointing at empty space
+  (no line character in its expected connecting direction), THE system SHALL
+  report a broken-arrow orphan and SHALL remove the arrow head in
+  `corrected_diagram`.
 
 ### From US-002 (Auto-fix)
 
@@ -106,8 +126,9 @@ unambiguous, it also returns the corrected diagram.
   connected component contains both single-line and double-line box-drawing
   characters.
 - **FR-008:** The system MUST assign one of three severities to every issue:
-  `error` (broken connectivity, box mismatch), `warning` (style
-  inconsistency, likely-decorative cross), `info` (suggestions).
+  `error` (broken connectivity, box mismatch, orphan symbol), `warning` (style
+  inconsistency, likely-decorative cross, intact single-character component
+  that may be intentional), `info` (suggestions).
 - **FR-009:** The system MUST produce a JSON output object with the schema:
   `{status, issues[], corrected_diagram}` (see Data Model).
 - **FR-010:** The system MUST auto-fill single-cell connectivity gaps when the
@@ -120,6 +141,25 @@ unambiguous, it also returns the corrected diagram.
 - **FR-013:** The system MUST preserve all non-diagram content (labels, text,
   surrounding prose) byte-for-byte identical in `corrected_diagram`, except
   for characters explicitly corrected.
+- **FR-016:** The system MUST detect **orphan symbols** — connectors that
+  have no adjacent connectors in any of their expected directions (as defined
+  in Appendix A). A connector is orphaned if and only if the cell in every
+  expected cardinal direction is empty, non-connector, or out of bounds.
+- **FR-017:** The system MUST distinguish between:
+  - **Fully isolated orphan** — a single connector with zero connections.
+  - **Component orphan** — a small connected component (2–4 cells) where
+    every connector in the component is disconnected from the wider diagram.
+    These are fragments of a larger structure (e.g., a wall segment, a
+    corner pair, a partial arrow) and SHALL be removed in their entirety.
+- **FR-018:** When a connector is determined to be an orphan, the unambiguous
+  fix is to replace it with `U+0020 SPACE` in `corrected_diagram`. For
+  component orphans, every cell in the orphan component SHALL be replaced with
+  `U+0020 SPACE`.
+- **FR-019:** The system MUST NOT treat a standalone `●` or `○` (circle) as
+  an orphan if it is at least 2 cells away from any other connector — it may
+  be an intentional node label marker. Circles within 1 cell of another
+  connector that do not connect to it SHALL be reported as potential orphans
+  at `warning` severity (not removed automatically).
 - **FR-014:** The CLI MUST support `--check` mode (exit non-zero if issues
   exist, no output) and `--fix` mode (output corrected diagram to stdout or
   file).
@@ -160,7 +200,7 @@ diagram: str  — raw UTF-8 string containing the ASCII diagram
       "end_line": 5,        // optional, for multi-cell issues
       "end_col": 14,
       "severity": "error",  // "error" | "warning" | "info"
-      "type": "gap",        // "gap" | "box_width" | "style_mix" | "dangling_junction"
+      "type": "gap",        // "gap" | "box_width" | "style_mix" | "dangling_junction" | "orphan"
       "message": "Disconnected vertical line: expected connector below '├' at (5,12), found empty space for 1 cell before '└'",
       "fixable": true,
       "fix_suggestion": "Insert '│' at (6,12) to connect '├' to '└'"
@@ -191,6 +231,13 @@ diagram: str  — raw UTF-8 string containing the ASCII diagram
 | EC-013 | A `│` at the very top or bottom of the diagram with no connector above/below | Report as `error` — a vertical line must connect to something or it's a fragment |
 | EC-014 | Mixed arrow styles in same diagram (Unicode `→` vs ASCII `->`) | Report as `warning` (style inconsistency). Do not attempt to unify arrow styles automatically. |
 | EC-015 | Diagram with diacritics or combining characters that affect column alignment | Treat each Unicode grapheme cluster as occupying its display width (e.g., CJK chars = 2 cells). Report alignment issues if detected. |
+| EC-016 | A standalone `│` with empty cells above and below | Report as `orphan` (severity: `error`); replace with space in `corrected_diagram` |
+| EC-017 | A `└` and `─` adjacent (forming a partial bottom-left corner of a box) with no matching right-side or top connectors anywhere | Report both cells as component orphans; remove the entire orphan fragment in `corrected_diagram` |
+| EC-018 | An arrow tail `▶` with no `─` to its left | Report as `orphan` (broken arrow head); remove in `corrected_diagram` |
+| EC-019 | A fragment of a box wall: three `─` in a row with nothing connected to either end | Report as component orphan; remove all three in `corrected_diagram` |
+| EC-020 | A `●` (circle) over 2 cells away from any connector | Do NOT report as orphan — likely an intentional label node |
+| EC-021 | A `●` exactly 1 cell away from a `│` but not touching it | Report as potential orphan at `warning` severity; do NOT auto-remove |
+| EC-022 | A `╲` (diagonal) with no diagonal neighbor in either direction | Report as `orphan`; remove in `corrected_diagram` |
 
 ---
 
