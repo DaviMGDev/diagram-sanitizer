@@ -1,6 +1,6 @@
 # SPEC.md — ASCII Diagram Sanitizer
 
-**Version:** 1.1  
+**Version:** 1.2  
 **Date:** 2026-06-07  
 **Status:** Draft
 
@@ -188,10 +188,12 @@ is unambiguous.
   `sanitize(diagram: str, options: dict | None = None) -> dict` that accepts
   a diagram string and optional options dictionary, and returns the full JSON
   report as a Python dict.
-- **AC-012:** The CLI MUST read from a file path argument or from stdin via the
-  `--stdin` flag. When invoked with no arguments, the CLI MUST print the
-  help message and exit with code `0`. The CLI MUST print the JSON report
-  to stdout and exit with code `0` (ok), `1` (warnings), or `2` (errors).
+- **AC-012:** The CLI MUST read from a file path argument, or from stdin when
+  passed `-` as the file argument or when stdin is a pipe and no file argument
+  is given. When invoked with no arguments and stdin is a terminal, the CLI
+  MUST print the help message and exit with code `0`. The CLI MUST print the
+  JSON report to stdout and exit with code `0` (ok), `1` (warnings), or
+  `2` (errors).
 
 ---
 
@@ -205,10 +207,12 @@ is unambiguous.
   box-drawing, arrow, or circle character as a **connector** and determine
   its expected connections based on character type (see appendix).
 - **FR-005:** The CLI MUST support `--check` mode (exit with code 0 if no
-  issues, 1 if only warnings, 2 if any errors; no output) and `--fix` mode
-  (output corrected diagram to stdout or file).
+  issues, 1 if only warnings, 2 if any errors; no output), `--fix` mode
+  (output corrected diagram to stdout), and `--fix --in-place` mode
+  (atomically overwrite the input file with corrections).
 - **FR-006:** The CLI MUST support `--format json|text` to control output
-  format.
+  format (default: `json`). The CLI MUST also support `--tab-width N`
+  to control tab expansion width (default: 4).
 - **FR-007:** The system MUST traverse each connector's expected directions
   by ray-casting outward cell-by-cell in each cardinal direction until it
   either encounters another connector (connection satisfied) or reaches empty
@@ -319,8 +323,10 @@ is unambiguous.
      (FR-013).
   9. **Cross/arrow/circle validation**: Check crosses, arrow heads, circles
      (FR-021, AC-005, AC-006).
-  10. **Fix application**: Apply unambiguous fixes in order: gap fill →
-      orphan removal → box normalization → style unification (FR-016–018).
+  10. **Fix application**: Apply unambiguous fixes in order: orphan removal →
+      gap fill → box normalization → style unification (FR-016–018,
+      FR-010). Orphan removal runs first so that gaps pointing at
+      orphaned cells do not trigger spurious gap fills.
   11. **Output generation**: Produce JSON report and corrected diagram
       (FR-015, FR-025).
 
@@ -337,7 +343,8 @@ is unambiguous.
   reference the actual characters found vs. expected.
 - **NFR-004:** The system SHOULD process diagrams with up to 10,000 connector
   cells without exceeding 256 MB of memory.
-- **NFR-005:** The system MUST support Python 3.10, 3.11, 3.12, and 3.13.
+- **NFR-005:** The system MUST support Python 3.10, 3.11, 3.12, 3.13, and
+  3.14.
 - **NFR-006:** The system MUST handle input encoding errors gracefully:
   invalid UTF-8 sequences SHOULD be replaced with U+FFFD (REPLACEMENT
   CHARACTER) before analysis, and a warning SHOULD be emitted.
@@ -391,8 +398,19 @@ The `corrected_diagram` field is:
   was applied
 
 The `id` field is optional and provides a stable, predictable identifier for
-each issue (e.g., `"GAP-5-12"` combining the issue type and location).
-Implementations MAY include it for CI integration.
+each issue. When present, it follows the format `<TYPE>-<LINE>-<COL>` where
+`TYPE` is an abbreviated issue type code. Implementations MAY include it for
+CI integration.
+
+| Issue type | `id` prefix |
+|---|---|
+| `gap` | `GAP` |
+| `box_width` | `BOX` |
+| `style_mix` | `STYLE` |
+| `dangling_junction` | `DANGL` |
+| `orphan` | `ORPH` |
+| `missing_side` | `SIDE` |
+| `arrow_orphan` | `ARRW` |
 
 The `end_line` and `end_col` fields are present for multi-cell issues:
 - **Box-width mismatches** — span of the box borders
@@ -435,6 +453,7 @@ Single-cell issues (fully isolated orphans, single-cell gaps) do not include
 | EC-024 | Two independent diagram components that share one or more cells (overlapping layouts) | Report each overlapping cell as a conflict `error`; mark `fixable: false` — the intended topology is ambiguous |
 | EC-025 | Input starts with a UTF-8 BOM (U+FEFF) | Strip the BOM before analysis; do not treat it as diagram content |
 | EC-026 | Input contains ANSI escape codes | Strip ANSI escape sequences before analysis (they are not diagram content); do not report them as errors |
+| EC-027 | Two analysis stages detect the same issue on the same cell | Deduplicate: keep the first occurrence by pipeline stage order. Duplicates are defined as issues sharing the same `type`, `line`, and `col`. |
 | EC-028 | Diagram consists entirely of `─` or `│` characters with no junctions, corners, or arrow heads | Report as `orphan` (each disconnected segment is an orphan); remove all in `corrected_diagram` |
 | EC-029 | An orphaned full arrow (`→`, `←`, `↑`, `↓`) with no connectors on either expected side | Report as `orphan` (severity: `error`); remove in `corrected_diagram`. Same as other fully isolated orphans. |
 | EC-030 | A connected component mixes Unicode box-drawing characters (`┌─┐│└┘`) with ASCII equivalents (`+`, `-`, `\|`) | Report as `info` — the component uses two styles for the same structural purpose. Do not attempt to unify automatically (the conversion is lossy: `+` could be a cross or a corner). |
@@ -451,9 +470,9 @@ Single-cell issues (fully isolated orphans, single-cell gaps) do not include
   only.
 - **Non-ASCII diagrams** — images, SVG, Mermaid, Graphviz DOT, or any
   non-text diagram format.
-- **Formal diagram types beyond the 16 in diagram.md** — UML class diagrams,
-  BPMN, detailed circuit diagrams, etc. are not explicitly supported though
-  generic box/line analysis may catch some issues.
+- **Formal diagram types beyond basic boxes, trees, and flowcharts** — UML
+  class diagrams, BPMN, detailed circuit diagrams, etc. are not explicitly
+  supported though generic box/line analysis may catch some issues.
 - **Interactive mode** — the tool is batch/one-shot; no TUI or real-time
   editing.
 - **Semantic validation** — the tool does not check whether a flowchart is
@@ -483,9 +502,14 @@ Key properties of the pipeline:
   cells as earlier stages (e.g., an orphan cell may also be part of a box).
   All issues are collected and reported.
 - **Fixes are sequential**: when multiple fix types apply to the same region,
-  they are applied in the order listed in FR-027 step 10. Earlier fixes may
-  affect later fix applicability (e.g., removing an orphan may resolve a
-  gap).
+  they are applied in the order listed in FR-027 step 10 (orphan removal →
+  gap fill → box normalization → style unification). Earlier fixes may
+  affect later fix applicability (e.g., removing an orphan may resolve a gap
+  that was detected during analysis).
+- **Duplicate issues MUST be deduplicated** before the report is generated.
+  Two issues are duplicates if they share the same `type`, `line`, and
+  `col`. When duplicates exist, the one from the earliest pipeline stage
+  that detected it is kept.
 - **The corrected diagram is derived from the normalized input copy** with
   fixes applied incrementally. Intermediate states are not exposed.
 - **If any fix is ambiguous** (the step cannot determine a single correction),
@@ -496,9 +520,10 @@ Key properties of the pipeline:
 ## Dependencies & Assumptions
 
 - **Runtime:** Python 3.10+.
-- **Libraries:** May use `click` or `typer` for CLI; `pydantic` for data
-  model validation; `wcwidth` for Unicode display width. All optional at
-  library level (CLI extras).
+- **Libraries:** Uses `click` for CLI (required for the `das` command).
+  May optionally use `pydantic` for data model validation and `wcwidth` for
+  Unicode display width. The library API (`sanitize()`) uses only Python
+  stdlib.
 - **Assumption:** Input is rendered in a monospaced font where every
   character occupies exactly one column (or two for CJK full-width).
 - **Assumption:** Box-drawing characters follow standard Unicode semantics
@@ -510,7 +535,8 @@ Key properties of the pipeline:
 
 ## Constraints
 
-- Must be installable via `pip install ascii-sanitizer` (or equivalent).
+- Must be installable via `pip install diagram-sanitizer` (or equivalent
+  — the published package name).
 - Must not require network access at runtime.
 - Must not modify the input file on disk unless explicitly asked (`--fix
   --in-place`), and even then must use atomic file replacement (FR-024).
@@ -563,13 +589,17 @@ connector is auto-fixable; gaps of 2+ are reported but not auto-fixed.
 
 ## Appendix B: CLI Usage Sketch
 
+The installed command is `das`.
+
 ```
-$ ascii-sanitizer diagram.txt
+$ das diagram.txt
 { "status": "error", "issues": [...], "corrected_diagram": "..." }
 
-$ ascii-sanitizer --check diagram.txt    # exit code only, no output
-$ ascii-sanitizer --fix diagram.txt      # print corrected diagram to stdout
-$ ascii-sanitizer --fix --in-place diagram.txt   # overwrite file atomically
-$ cat diagram.txt | ascii-sanitizer --fix --stdin   # stdin to stdout
-$ ascii-sanitizer                                     # prints help
+$ das --check diagram.txt                # exit code only, no output
+$ das --fix diagram.txt                  # print corrected diagram to stdout
+$ das --fix --in-place diagram.txt       # overwrite file atomically
+$ das --format text diagram.txt          # human-readable text report
+$ das --tab-width 2 diagram.txt          # custom tab expansion width
+$ cat diagram.txt | das --fix -          # read from stdin, fix, print to stdout
+$ das                                    # prints help (stdin is terminal)
 ```
