@@ -3,6 +3,9 @@ name = "diagram-sanitizer"
 version = "1.0.0"
 description = "Validate and auto-correct ASCII diagrams for structural integrity"
 requires-python = ">=3.10"
+dependencies = [
+    "click>=8.0",
+]
 keywords = ["ascii", "diagram", "sanitizer", "validation"]
 classifiers = [
     "Development Status :: 4 - Beta",
