@@ -1,7 +1,7 @@
 # SPEC.md — ASCII Diagram Sanitizer
 
-**Version:** 1.0  
-**Date:** 2026-06-06  
+**Version:** 1.1  
+**Date:** 2026-06-07  
 **Status:** Draft
 
 ---
@@ -25,6 +25,80 @@ arrow, circle, or ASCII line characters that are completely disconnected from
 any other connector — meaning they are fragments of a broken arrow, a broken
 box wall, a broken line, or any other once-intact structure. These orphans are
 reported and, when unambiguous, removed from the corrected diagram.
+
+---
+
+## Definitions
+
+### Connector
+
+A **connector** is any cell in the 2D character grid whose character is
+listed in Appendix A (box-drawing characters, arrows, circles, ASCII line
+characters, diagonals). Every connector has a set of **expected connection
+directions** determined by its character type (see Appendix A).
+
+All characters matching the connector set are treated as diagram connectors
+during analysis. Characters that are not connectors (letters, digits,
+punctuation outside the connector set, whitespace) are **non-connector
+content** and are preserved as-is in the output (see FR-019).
+
+> **Note:** Connector characters (`-`, `|`, `+`, etc.) embedded in non-diagram
+> prose may produce false-positive issues. Users should isolate diagram
+> regions before analysis, or use the tool's library API to process specific
+> sections. Future versions may add context-aware text-region detection.
+
+### Adjacency
+
+Two connectors are **adjacent** if their cells share an edge (i.e., are
+immediately next to each other in one of the four cardinal directions: up,
+down, left, right). Diagonal adjacency does **not** qualify for connectivity,
+except for diagonal characters (`╲`, `╱`) which use Chebyshev distance 1
+(any of the 8 neighboring cells).
+
+### Connectivity (Direct Connection)
+
+Two adjacent connectors are **directly connected** if each cell's expected
+connection directions include the direction toward the other cell. Formally,
+for cells A and B separated by one step in direction D (where D is one of
+up/down/left/right):
+
+- A expects connection in direction D toward B, **and**
+- B expects connection in the opposite direction (toward A).
+
+If either cell does not expect a connection in that direction, the two cells
+are not directly connected (they may be coincidentally adjacent without being
+part of the same diagram line).
+
+### Connected Component
+
+A **connected component** is a maximal set of connectors where every cell is
+reachable from every other cell via a path of directly connected intermediate
+cells (using the connectivity rule above). Non-connector cells are never part
+of a connected component.
+
+### Orphan
+
+An **orphan** is a connector or a connected component that is disconnected
+from the main diagram structure. Specifically:
+
+- **Fully isolated orphan (size 1):** A single connector with zero directly
+  connected neighbors in any of its expected directions.
+- **Component orphan (size 2+):** A connected component of 2 or more
+  connectors where the entire component has no direct connections to any
+  connector outside the component.
+
+A component is considered an orphan **regardless of its size** if it is
+disconnected from the largest connected component in the input. If the input
+contains multiple large disconnected diagrams of comparable size, each is
+analyzed independently and neither is treated as an orphan of the other (see
+EC-012).
+
+### Gap
+
+A **gap** is one or more consecutive empty cells along a row or column that
+interrupt the expected connection path between two connectors. A gap of
+exactly 1 empty cell is **auto-fixable** when the line character to fill it
+is unambiguous.
 
 ---
 
@@ -54,7 +128,8 @@ reported and, when unambiguous, removed from the corrected diagram.
   `severity`, and `message`.
 - **AC-003:** WHEN a box has mismatched top and bottom border widths (i.e.,
   the horizontal span between `┌─…─┐` differs from `└─…─┘`), THE system MUST
-  report a structural error for that box.
+  report a structural error for that box. This applies to both single-line
+  (`┌┐└┘`) and double-line (`╔╗╚╝`) corners.
 - **AC-004:** WHEN a connected component mixes single-line box-drawing
   characters (`┌─┐│└┘├┤┴┬┼`) with double-line characters (`╔═╗║╚╝`), THE system
   MUST report a warning.
@@ -65,24 +140,19 @@ reported and, when unambiguous, removed from the corrected diagram.
 - **AC-006:** WHEN an arrow head (`▶▼◀▲`) or circle (`●○`) has no line
   character in its expected pointing/connecting direction, THE system MUST
   report a connectivity error.
-- **AC-013:** WHEN a connector has no adjacent connectors in any of its
-  expected directions (i.e., it is fully orphaned — not part of any connected
-  component larger than itself), THE system MUST report it as an orphan issue
-  and MUST remove it (replace with `U+0020 SPACE`) in `corrected_diagram`.
-- **AC-014:** WHEN an isolated component (2 or more characters that are
-  connected to each other but not to any larger structure) is recognisable as
-  a fragment of a broken structure (e.g., a wall segment missing both ends, a
-  corner pair with no opposite corners, an arrow tail without a head), THE
-  system MUST report each constituent connector as an orphan and MUST remove
-  the entire orphan component in `corrected_diagram`.
+- **AC-013:** WHEN a single connector has no directly connected neighbors in
+  any of its expected directions (a fully isolated orphan of size 1), THE
+  system MUST report it as an orphan issue and MUST remove it (replace with
+  `U+0020 SPACE`) in `corrected_diagram`.
+- **AC-014:** WHEN a connected component of 2 or more connectors has no
+  direct connections to any connector outside the component (a component
+  orphan), THE system MUST report each constituent connector as an orphan and
+  MUST remove the entire orphan component in `corrected_diagram`. This applies
+  regardless of the component's size; there is no upper size limit.
 - **AC-015:** WHEN a diagram contains an arrow head pointing at empty space
   (no line character in its expected connecting direction), THE system MUST
   report a broken-arrow orphan and MUST remove the arrow head in
   `corrected_diagram`.
-- **AC-016:** WHEN a diagram contains text, labels, or prose intermixed with
-  box-drawing characters, THE system MUST preserve all non-connector
-  characters unchanged in `corrected_diagram`, subject only to whitespace
-  normalization (FR-002, FR-019).
 - **AC-017:** WHEN a connectivity gap is detected, THE system MUST assign
   severity `"error"`. WHEN a style inconsistency is detected, THE system
   MUST assign severity `"warning"`. WHEN an optional suggestion is provided,
@@ -107,12 +177,17 @@ reported and, when unambiguous, removed from the corrected diagram.
 - **AC-010:** WHEN an issue is ambiguous (multiple possible fixes, unclear
   intent), THE system MUST set `fixable: false` and MUST NOT modify the
   diagram in `corrected_diagram` (the field MUST be `null`).
+- **AC-016:** WHEN a diagram contains text, labels, or prose intermixed with
+  box-drawing characters, THE system MUST preserve all non-connector
+  characters unchanged in `corrected_diagram`, subject only to whitespace
+  normalization (FR-002, FR-019).
 
 ### From US-003 (Library)
 
 - **AC-011:** The system MUST expose a top-level function
-  `sanitize(diagram: str) -> dict` that accepts a string and returns the full
-  JSON report as a Python dict.
+  `sanitize(diagram: str, options: dict | None = None) -> dict` that accepts
+  a diagram string and optional options dictionary, and returns the full JSON
+  report as a Python dict.
 - **AC-012:** The CLI MUST read from a file path argument or stdin, print
   the JSON report to stdout, and exit with code `0` (ok), `1` (warnings),
   or `2` (errors).
@@ -141,40 +216,43 @@ reported and, when unambiguous, removed from the corrected diagram.
   same row (horizontal) or same column (vertical) are considered; diagonal
   adjacency does not satisfy cardinal-direction connections.
 - **FR-008:** The system MUST detect **orphan symbols** — connectors that
-  have no adjacent connectors in any of their expected directions (as defined
-  in Appendix A). A connector is orphaned if and only if the cell in every
-  expected cardinal direction is empty, non-connector, or out of bounds.
+  have no directly connected neighbors in any of their expected directions (as
+  defined in the Definitions section and Appendix A). A connector is orphaned
+  if and only if the cell in every expected cardinal direction is empty,
+  non-connector, or out of bounds.
 - **FR-009:** The system MUST distinguish between:
-  - **Fully isolated orphan** — a single connector with zero connections.
-  - **Component orphan** — a connected component of 2 or more cells where
-    every connector in the component is disconnected from the wider diagram.
-    Components of 2–4 cells are presumptive orphans; components of 5+ cells
-    that are similarly isolated from any larger structure MUST also be
-    reported as orphans. These are fragments of a larger structure (e.g., a
-    wall segment, a corner pair, a partial arrow) and MUST be removed in
-    their entirety.
+  - **Fully isolated orphan** — a single connector with zero directly
+    connected neighbors.
+  - **Component orphan** — a connected component of 2 or more connectors
+    where every connector in the component has no direct connections to any
+    connector outside the component. This applies uniformly regardless of
+    component size; there is no size threshold distinction.
+  Both types MUST be reported as orphans and removed in `corrected_diagram`.
 - **FR-010:** When a connector is determined to be an orphan, the unambiguous
   fix is to replace it with `U+0020 SPACE` in `corrected_diagram`. For
   component orphans, every cell in the orphan component MUST be replaced with
   `U+0020 SPACE`.
 - **FR-011:** The system MUST NOT treat a standalone `●` or `○` (circle) as
-  an orphan if it is at least 2 cells away from any other connector — it may
-  be an intentional node label marker. Circles within 1 cell of another
-  connector that do not connect to it MUST be reported as potential orphans
-  at `warning` severity (not removed automatically).
+  an orphan if it is more than 1 cell away from any other connector — it may
+  be an intentional node label marker. Circles exactly 1 cell away from
+  another connector that do not connect to it MUST be reported as potential
+  orphans at `warning` severity (not removed automatically).
 - **FR-012:** The system MUST report a **box-width mismatch** when the
   horizontal span between a pair of top corners (`┌…┐`) differs from the
   span between the corresponding bottom corners (`└…┘`) of the same box.
-  A box is identified by matching `┌` with the nearest `┐` on the same row
-  that has a corresponding `└`/`┘` pair vertically aligned at the same
-  columns. Box corners are paired greedily left-to-right, top-to-bottom.
+  A box is identified by matching `┌` with the closest `┐` to its right on
+  the same row that has a corresponding `└` at the same column offset below,
+  and vice versa for bottom corners. Box corners are paired greedily
+  left-to-right, top-to-bottom. The same algorithm applies to double-line
+  corners (`╔╗╚╝`).
 - **FR-013:** The system MUST report a **style inconsistency** when a single
   connected component contains both single-line and double-line box-drawing
   characters.
 - **FR-014:** The system MUST assign one of three severities to every issue:
-  `error` (broken connectivity, box mismatch, orphan symbol), `warning` (style
-  inconsistency, likely-decorative cross, intact single-character component
-  that may be intentional), `info` (suggestions).
+  `error` (broken connectivity, box mismatch, orphan symbol, missing box
+  side), `warning` (style inconsistency, likely-decorative cross, intact
+  single-character component that may be intentional, diagonal orphan, circle
+  1 cell from another connector without connection), `info` (suggestions).
 - **FR-015:** The system MUST produce a JSON output object with the schema:
   `{status, issues[], corrected_diagram}` (see Data Model).
 - **FR-016:** The system MUST auto-fill single-cell connectivity gaps when the
@@ -200,6 +278,50 @@ reported and, when unambiguous, removed from the corrected diagram.
 - **FR-022:** Every issue in the `issues` array MUST include a `fixable`
   boolean field indicating whether the system can unambiguously correct
   the issue.
+- **FR-023:** The CLI MUST exit with code `0` when `status` is `"ok"`, code
+  `1` when `status` is `"warning"` (only warnings, no errors), and code `2`
+  when `status` is `"error"` (any error-level issues present). In `--check`
+  mode, the exit code carries the status but no JSON or text output is
+  produced.
+- **FR-024:** When `--fix --in-place` is used, the system MUST write the
+  corrected diagram to a temporary file first, then atomically replace the
+  original file. If any error occurs during correction, the original file
+  MUST NOT be modified and the system MUST exit with code `2`.
+- **FR-025:** The `corrected_diagram` field in the output MUST be `null` when
+  no issues are fixable (i.e., all issues have `fixable: false`, or the
+  issues array is empty). It MUST be a string when at least one fixable issue
+  was corrected.
+- **FR-026:** The system MUST treat every character matching the connector
+  character set (Appendix A) as a diagram connector during analysis. Characters
+  not in the connector set are **non-connector content** and MUST be preserved
+  as-is. The system does not perform semantic text-vs-diagram classification;
+  users processing files with connector characters in prose should isolate
+  diagram sections beforehand.
+- **FR-027:** The system MUST process the diagram in the following pipeline
+  order:
+  1. **Preprocessing**: BOM stripping (EC-025), ANSI escape removal (EC-026),
+     tab expansion (EC-009), line-ending normalization (FR-002), trailing
+     whitespace trimming (EC-011).
+  2. **Grid construction**: Parse normalized input into a 2D character grid
+     (FR-003).
+  3. **Connector classification**: Classify every cell as connector or
+     non-connector (FR-004).
+  4. **Connected component analysis**: Cluster connectors into connected
+     components using the adjacency and connectivity rules (Definitions).
+  5. **Orphan detection**: Identify fully isolated orphans and component
+     orphans (FR-008, FR-009).
+  6. **Gap detection**: Ray-cast from each connector along expected
+     directions to find gaps (FR-007).
+  7. **Box analysis**: Identify boxes and detect width mismatches (FR-012,
+     AC-003).
+  8. **Style analysis**: Detect mixed single/double-line within components
+     (FR-013).
+  9. **Cross/arrow/circle validation**: Check crosses, arrow heads, circles
+     (FR-021, AC-005, AC-006).
+  10. **Fix application**: Apply unambiguous fixes in order: gap fill →
+      orphan removal → box normalization → style unification (FR-016–018).
+  11. **Output generation**: Produce JSON report and corrected diagram
+      (FR-015, FR-025).
 
 ---
 
@@ -212,6 +334,12 @@ reported and, when unambiguous, removed from the corrected diagram.
   within the grid, though width calculation must account for display width).
 - **NFR-003:** Error messages in `issues` MUST be human-readable and MUST
   reference the actual characters found vs. expected.
+- **NFR-004:** The system SHOULD process diagrams with up to 10,000 connector
+  cells without exceeding 256 MB of memory.
+- **NFR-005:** The system MUST support Python 3.10, 3.11, 3.12, and 3.13.
+- **NFR-006:** The system MUST handle input encoding errors gracefully:
+  invalid UTF-8 sequences SHOULD be replaced with U+FFFD (REPLACEMENT
+  CHARACTER) before analysis, and a warning SHOULD be emitted.
 
 ---
 
@@ -221,6 +349,12 @@ reported and, when unambiguous, removed from the corrected diagram.
 
 ```
 diagram: str  — raw UTF-8 string containing the ASCII diagram
+options: dict | None (optional) — configuration options:
+  {
+    "tab_width": 4,        // spaces per tab (default: 4)
+    "max_grid_width": 400, // maximum columns before warning (default: 400)
+    "mode": "check" | "fix" | "auto"  // processing mode (default: "auto")
+  }
 ```
 
 ### Output (JSON)
@@ -230,20 +364,43 @@ diagram: str  — raw UTF-8 string containing the ASCII diagram
   "status": "ok",           // "ok" | "warning" | "error"
   "issues": [
     {
+      "id": "GAP-5-12",     // optional, stable identifier for CI integration
       "line": 5,            // 1-indexed line number
       "col": 12,            // 1-indexed column (character position)
-      "end_line": 5,        // optional, for multi-cell issues
-      "end_col": 14,
+      "end_line": 5,        // optional, present for multi-cell issues
+      "end_col": 14,        //   (boxes, component orphans, multi-cell gaps)
       "severity": "error",  // "error" | "warning" | "info"
-      "type": "gap",        // "gap" | "box_width" | "style_mix" | "dangling_junction" | "orphan"
+      "type": "gap",        // "gap" | "box_width" | "style_mix"
+                            // | "dangling_junction" | "orphan" | "missing_side"
       "message": "Disconnected vertical line: expected connector below '├' at (5,12), found empty space for 1 cell before '└'",
       "fixable": true,
       "fix_suggestion": "Insert '│' at (6,12) to connect '├' to '└'"
     }
   ],
-  "corrected_diagram": "…"  // string | null (null if no fix, or no fixable issues)
+  "corrected_diagram": "…"  // string | null
+                            // null when no issues or no fixable issues;
+                            // string when at least one fixable issue was corrected
 }
 ```
+
+The `corrected_diagram` field is:
+- **`null`** when the `issues` array is empty (no issues found)
+- **`null`** when all issues have `fixable: false` (no unambiguous corrections)
+- **`string`** when at least one issue has `fixable: true` and the correction
+  was applied
+
+The `id` field is optional and provides a stable, predictable identifier for
+each issue (e.g., `"GAP-5-12"` combining the issue type and location).
+Implementations MAY include it for CI integration.
+
+The `end_line` and `end_col` fields are present for multi-cell issues:
+- **Box-width mismatches** — span of the box borders
+- **Component orphans** — bounding box of the orphan component
+- **Style inconsistencies** — span of the mixed-style component
+- **Multi-cell gaps** — start and end of the empty cell run
+
+Single-cell issues (fully isolated orphans, single-cell gaps) do not include
+`end_line` / `end_col`.
 
 ---
 
@@ -262,7 +419,7 @@ diagram: str  — raw UTF-8 string containing the ASCII diagram
 | EC-009 | Diagram with tab characters | Replace tabs with 4 spaces before analysis (configurable via option) |
 | EC-010 | Very wide diagram (>200 columns) | Process normally; the 2D grid is sparse so performance is bounded by character count, not grid dimensions |
 | EC-011 | Diagram with trailing whitespace | Trim trailing whitespace from each line before analysis (whitespace normalization is applied to the analysis copy; the `corrected_diagram` output preserves original whitespace on unmodified lines and uses normalized whitespace on corrected lines) |
-| EC-012 | Multiple disconnected diagram regions in one input | Analyze each connected component independently. Report issues per component. |
+| EC-012 | Multiple disconnected diagram regions in one input | Analyze each connected component independently. Each component is compared against the largest component: components disconnected from the largest are reported as orphans (see Definitions — Orphan). If no single largest component is clearly dominant, all components are analyzed for internal issues but none is treated as an orphan of another. |
 | EC-013 | A `│` at the very top or bottom of the diagram with no connector above/below | Report as `error` — a vertical line must connect to something or it's a fragment |
 | EC-014 | Mixed arrow styles in same diagram (Unicode `→` vs ASCII `->`) | Report as `warning` (style inconsistency). Do not attempt to unify arrow styles automatically. |
 | EC-015 | Diagram with diacritics or combining characters that affect column alignment | Treat each Unicode grapheme cluster as occupying its display width (e.g., CJK chars = 2 cells). Report alignment issues if detected. |
@@ -270,15 +427,16 @@ diagram: str  — raw UTF-8 string containing the ASCII diagram
 | EC-017 | A `└` and `─` adjacent (forming a partial bottom-left corner of a box) with no matching right-side or top connectors anywhere | Report both cells as component orphans; remove the entire orphan fragment in `corrected_diagram` |
 | EC-018 | An arrow tail `▶` with no `─` to its left | Report as `orphan` (broken arrow head); remove in `corrected_diagram` |
 | EC-019 | A fragment of a box wall: three `─` in a row with nothing connected to either end | Report as component orphan; remove all three in `corrected_diagram` |
-| EC-020 | A `●` (circle) over 2 cells away from any connector | Do NOT report as orphan — likely an intentional label node |
+| EC-020 | A `●` (circle) more than 1 cell away from any connector | Do NOT report as orphan — likely an intentional label node |
 | EC-021 | A `●` exactly 1 cell away from a `│` but not touching it | Report as potential orphan at `warning` severity; do NOT auto-remove |
 | EC-022 | A `╲` (diagonal) with no diagonal neighbour in either direction (within Chebyshev distance 1, i.e., any of the 4 diagonal cells) | Report as `orphan` at `warning` severity; remove in `corrected_diagram` |
 | EC-023 | A box with only three complete sides (e.g., `┌──┐` with `│` on left and right but no bottom `└┘`) | Report missing side as a structural `error`; mark `fixable: false` — the intended shape is ambiguous |
 | EC-024 | Two independent diagram components that share one or more cells (overlapping layouts) | Report each overlapping cell as a conflict `error`; mark `fixable: false` — the intended topology is ambiguous |
 | EC-025 | Input starts with a UTF-8 BOM (U+FEFF) | Strip the BOM before analysis; do not treat it as diagram content |
 | EC-026 | Input contains ANSI escape codes | Strip ANSI escape sequences before analysis (they are not diagram content); do not report them as errors |
-| EC-027 | An isolated component of 5+ cells that is completely disconnected from any larger structure | Report as component orphan (severity: `error`); remove in `corrected_diagram` (same treatment as 2–4 cell component orphans) |
 | EC-028 | Diagram consists entirely of `─` or `│` characters with no junctions, corners, or arrow heads | Report as `orphan` (each disconnected segment is an orphan); remove all in `corrected_diagram` |
+| EC-029 | An orphaned full arrow (`→`, `←`, `↑`, `↓`) with no connectors on either expected side | Report as `orphan` (severity: `error`); remove in `corrected_diagram`. Same as other fully isolated orphans. |
+| EC-030 | A connected component mixes Unicode box-drawing characters (`┌─┐│└┘`) with ASCII equivalents (`+`, `-`, `\|`) | Report as `info` — the component uses two styles for the same structural purpose. Do not attempt to unify automatically (the conversion is lossy: `+` could be a cross or a corner). |
 
 ---
 
@@ -299,7 +457,38 @@ diagram: str  — raw UTF-8 string containing the ASCII diagram
   editing.
 - **Semantic validation** — the tool does not check whether a flowchart is
   logically correct, only whether its structure is geometrically sound.
-- **Color or styling** — ANSI escape codes in the input are stripped during preprocessing (see EC-026).
+- **Color or styling** — ANSI escape codes in the input are stripped during
+  preprocessing (see EC-026).
+- **Context-aware text-region detection** — the tool treats all matching
+  connector characters as connectors. Users must isolate diagram regions if
+  connector characters appear in prose (see FR-026).
+
+---
+
+## Processing Pipeline
+
+The analysis proceeds in the following fixed order (as defined in FR-027):
+
+```
+Preprocessing → Grid Construction → Connector Classification →
+Connected Component Analysis → Orphan Detection → Gap Detection →
+Box Analysis → Style Analysis → Cross/Arrow/Circle Validation →
+Fix Application → Output Generation
+```
+
+Key properties of the pipeline:
+
+- **Detections are additive**: later stages may report issues on the same
+  cells as earlier stages (e.g., an orphan cell may also be part of a box).
+  All issues are collected and reported.
+- **Fixes are sequential**: when multiple fix types apply to the same region,
+  they are applied in the order listed in FR-027 step 10. Earlier fixes may
+  affect later fix applicability (e.g., removing an orphan may resolve a
+  gap).
+- **The corrected diagram is derived from the normalized input copy** with
+  fixes applied incrementally. Intermediate states are not exposed.
+- **If any fix is ambiguous** (the step cannot determine a single correction),
+  the step is skipped and the corresponding issues are marked `fixable: false`.
 
 ---
 
@@ -323,7 +512,7 @@ diagram: str  — raw UTF-8 string containing the ASCII diagram
 - Must be installable via `pip install ascii-sanitizer` (or equivalent).
 - Must not require network access at runtime.
 - Must not modify the input file on disk unless explicitly asked (`--fix
-  --in-place`).
+  --in-place`), and even then must use atomic file replacement (FR-024).
 - The library API must have zero required dependencies beyond Python stdlib;
   CLI extras can declare additional deps.
 
@@ -379,6 +568,6 @@ $ ascii-sanitizer diagram.txt
 
 $ ascii-sanitizer --check diagram.txt    # exit code only, no output
 $ ascii-sanitizer --fix diagram.txt      # print corrected diagram to stdout
-$ ascii-sanitizer --fix --in-place diagram.txt   # overwrite file
+$ ascii-sanitizer --fix --in-place diagram.txt   # overwrite file atomically
 $ cat diagram.txt | ascii-sanitizer --fix -      # stdin to stdout
 ```
