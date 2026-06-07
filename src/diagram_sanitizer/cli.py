@@ -12,7 +12,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "file",
         nargs="?",
-        help="Path to a file containing the diagram (reads from stdin if omitted).",
+        help="Path to a file containing the diagram.",
+    )
+    parser.add_argument(
+        "--stdin",
+        action="store_true",
+        help="Read diagram from standard input.",
     )
     parser.add_argument(
         "--json",
@@ -27,11 +32,14 @@ def main(argv: list[str] | None = None) -> int:
 
     args = parser.parse_args(argv)
 
-    if args.file:
+    if args.stdin:
+        diagram = sys.stdin.read()
+    elif args.file:
         with open(args.file) as f:
             diagram = f.read()
     else:
-        diagram = sys.stdin.read()
+        parser.print_help()
+        return 0
 
     # TODO: integrate the actual sanitizer logic
     print(diagram)
