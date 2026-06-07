@@ -188,9 +188,10 @@ is unambiguous.
   `sanitize(diagram: str, options: dict | None = None) -> dict` that accepts
   a diagram string and optional options dictionary, and returns the full JSON
   report as a Python dict.
-- **AC-012:** The CLI MUST read from a file path argument or stdin, print
-  the JSON report to stdout, and exit with code `0` (ok), `1` (warnings),
-  or `2` (errors).
+- **AC-012:** The CLI MUST read from a file path argument or from stdin via the
+  `--stdin` flag. When invoked with no arguments, the CLI MUST print the
+  help message and exit with code `0`. The CLI MUST print the JSON report
+  to stdout and exit with code `0` (ok), `1` (warnings), or `2` (errors).
 
 ---
 
@@ -569,5 +570,6 @@ $ ascii-sanitizer diagram.txt
 $ ascii-sanitizer --check diagram.txt    # exit code only, no output
 $ ascii-sanitizer --fix diagram.txt      # print corrected diagram to stdout
 $ ascii-sanitizer --fix --in-place diagram.txt   # overwrite file atomically
-$ cat diagram.txt | ascii-sanitizer --fix -      # stdin to stdout
+$ cat diagram.txt | ascii-sanitizer --fix --stdin   # stdin to stdout
+$ ascii-sanitizer                                     # prints help
 ```
