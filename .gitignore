@@ -7,7 +7,6 @@ build/
 
 # UV
 .venv/
-uv.lock
 
 # OS
 .DS_Store
