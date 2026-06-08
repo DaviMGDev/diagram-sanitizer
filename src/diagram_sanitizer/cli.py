@@ -10,7 +10,7 @@ from typing import TextIO
 
 import click
 
-from diagram_sanitizer import __version__
+from diagram_sanitizer import __version__, sanitize
 
 
 def _read_input(file_arg: str | None) -> str:
@@ -141,13 +141,16 @@ def main(
 
     diagram = _read_input(file)
 
-    # TODO: integrate the actual sanitizer logic
-    # Placeholder: return a clean report
-    report = {
-        "status": "ok",
-        "issues": [],
-        "corrected_diagram": None,
-    }
+    # Determine mode from flags
+    if check:
+        mode = "check"
+    elif fix:
+        mode = "fix"
+    else:
+        mode = "auto"
+
+    # Run the sanitizer engine
+    report = sanitize(diagram, {"tab_width": tab_width, "mode": mode})
 
     # --check mode: exit code only, no output (FR-023)
     if check:
