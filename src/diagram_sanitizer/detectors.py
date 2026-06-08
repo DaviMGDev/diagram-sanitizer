@@ -229,7 +229,7 @@ def detect_orphans(
             line, col = _to_1idx(cell.row, cell.col)
             issues.append(
                 _issue(
-                    line, col, "error", "orphan",
+                    line, col, "error", "arrow_orphan",
                     f"Arrow head '{cell.char}' points at empty space — broken arrow",
                     fixable=True,
                     fix_suggestion=f"Remove arrow head '{cell.char}' at ({line},{col})",
@@ -242,7 +242,7 @@ def detect_orphans(
             line, col = _to_1idx(cell.row, cell.col)
             issues.append(
                 _issue(
-                    line, col, "error", "orphan",
+                    line, col, "error", "arrow_orphan",
                     f"Full arrow '{cell.char}' has no connections — broken arrow",
                     fixable=True,
                     fix_suggestion=f"Remove arrow '{cell.char}' at ({line},{col})",
@@ -642,5 +642,245 @@ def detect_cross_arrow_circle(
 
         # ── Full arrow validation (EC-029) ──
         # Already handled by orphan detection
+
+    return issues
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 10. MISSING SIDE DETECTION
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+def detect_missing_sides(
+    grid: "Grid",
+    components: "list[Component]",
+) -> list[dict]:
+    """Detect boxes with incomplete sides (EC-023).
+
+    Checks for:
+    - Boxes where vertical or horizontal borders are missing
+    - Boxes where one or more corners are present but the opposite
+      side is entirely missing (3-sided boxes)
+    """
+    issues: list[dict] = []
+
+    for comp in components:
+        issues.extend(_detect_missing_sides_in_component(grid, comp))
+        issues.extend(_detect_missing_corners(grid, comp))
+
+    return issues
+
+
+def _detect_missing_corners(
+    grid: "Grid", comp: "Component"
+) -> list[dict]:
+    """Detect boxes where corners are present but opposite side is missing.
+
+    EC-023: A box with only three sides — e.g., ┌──┐ with │ on left and right
+    but no bottom └┘ — report as structural error.
+    """
+    issues: list[dict] = []
+
+    # Look for top-only boxes (┌ and ┐ present on same row)
+    for tl in comp.cells:
+        if tl.char not in ("┌", "╔"):
+            continue
+
+        # Find matching top-right corner
+        tr_candidates = [
+            c for c in comp.cells
+            if c.char in ("┐", "╗") and c.row == tl.row and c.col > tl.col
+        ]
+        if not tr_candidates:
+            # Top-left without top-right — this is just an orphan corner
+            # (already caught by orphan detection)
+            continue
+        tr = min(tr_candidates, key=lambda c: c.col)
+
+        # Check if there's a matching bottom row
+        bl_candidates = [
+            c for c in comp.cells
+            if c.char in ("└", "╚") and c.col == tl.col and c.row > tl.row
+        ]
+        br_candidates = [
+            c for c in comp.cells
+            if c.char in ("┘", "╝") and c.row > tl.row and c.col == tr.col
+        ]
+
+        if not bl_candidates or not br_candidates:
+            # Top corners exist but bottom is missing — 3-sided box (EC-023)
+            line, col = _to_1idx(tl.row, tl.col)
+            end_l, end_c = _to_1idx(
+                max(c.row for c in comp.cells if c.col in (tl.col, tr.col)),
+                tr.col,
+            )
+            missing = []
+            if not bl_candidates:
+                missing.append("bottom-left")
+            if not br_candidates:
+                missing.append("bottom-right")
+            issues.append(_issue(
+                line, col, "error", "missing_side",
+                f"Box has top border but missing bottom corners ({', '.join(missing)}) — incomplete box",
+                fixable=False,
+                end_line=end_l,
+                end_col=end_c,
+            ))
+
+    return issues
+
+
+def _detect_missing_sides_in_component(
+    grid: "Grid", comp: "Component"
+) -> list[dict]:
+    """Detect missing sides within a single component."""
+    issues: list[dict] = []
+
+    # Find top-left corners
+    for tl in comp.cells:
+        if tl.char not in ("┌", "╔"):
+            continue
+
+        # Find matching top-right corner
+        tr_candidates = [
+            c for c in comp.cells
+            if c.char in ("┐", "╗") and c.row == tl.row and c.col > tl.col
+        ]
+        if not tr_candidates:
+            continue
+        tr = min(tr_candidates, key=lambda c: c.col)
+
+        # Find bottom-left corner
+        bl_candidates = [
+            c for c in comp.cells
+            if c.char in ("└", "╚") and c.col == tl.col and c.row > tl.row
+        ]
+        if not bl_candidates:
+            continue
+        bl = min(bl_candidates, key=lambda c: c.row)
+
+        # Find bottom-right corner
+        br_candidates = [
+            c for c in comp.cells
+            if c.char in ("┘", "╝") and c.row == bl.row and c.col > bl.col
+        ]
+        if not br_candidates:
+            continue
+        br = min(br_candidates, key=lambda c: c.col)
+
+        # All 4 corners found — check vertical sides
+        v_line = "║" if tl.char == "╔" else "│"
+
+        # Check left vertical side
+        left_missing = []
+        for r in range(tl.row + 1, bl.row):
+            ch = grid.get(r, tl.col)
+            if ch not in (v_line, "├", "╠"):
+                left_missing.append(r)
+
+        # Check right vertical side
+        right_missing = []
+        for r in range(tr.row + 1, br.row):
+            ch = grid.get(r, tr.col)
+            if ch not in (v_line, "┤", "╣"):
+                right_missing.append(r)
+
+        if left_missing:
+            line, col = _to_1idx(tl.row + 1, tl.col)
+            end_l, _ = _to_1idx(bl.row - 1, tl.col)
+            issues.append(_issue(
+                line, col, "error", "missing_side",
+                f"Box has {len(left_missing)} missing cell(s) on left vertical border",
+                fixable=False,
+                end_line=end_l,
+                end_col=col,
+            ))
+
+        if right_missing:
+            line, col = _to_1idx(tr.row + 1, tr.col)
+            end_l, _ = _to_1idx(br.row - 1, tr.col)
+            issues.append(_issue(
+                line, col, "error", "missing_side",
+                f"Box has {len(right_missing)} missing cell(s) on right vertical border",
+                fixable=False,
+                end_line=end_l,
+                end_col=col,
+            ))
+
+    return issues
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 11. OVERLAP DETECTION
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+def detect_overlaps(
+    components: "list[Component]",
+) -> list[dict]:
+    """Detect overlapping components (EC-024).
+
+    Checks if any two connected components share grid positions.
+    This is defensive — the union-find algorithm should not produce overlaps,
+    but malformed input or manual grid modifications could create them.
+    """
+    issues: list[dict] = []
+    if len(components) < 2:
+        return issues
+
+    pos_to_comp: dict[tuple[int, int], int] = {}
+    for comp in components:
+        for cell in comp.cells:
+            pos = (cell.row, cell.col)
+            if pos in pos_to_comp:
+                # Overlap found
+                line, col = _to_1idx(cell.row, cell.col)
+                issues.append(_issue(
+                    line, col, "error", "overlap",
+                    f"Overlapping component at ({line},{col}): "
+                    f"component {comp.id} overlaps with component {pos_to_comp[pos]}",
+                    fixable=False,
+                ))
+            else:
+                pos_to_comp[pos] = comp.id
+
+    return issues
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 12. MIXED ARROW STYLE DETECTION
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+def detect_mixed_arrows(
+    connectors: "list[ConnectorCell]",
+    components: "list[Component]",
+) -> list[dict]:
+    """Detect mixed Unicode/ASCII arrow styles (EC-014).
+
+    Reports a warning when the input contains both Unicode full arrows
+    (→←↑↓) and ASCII dash connectors (-) which may represent ASCII arrow
+    approximations like -> or <-.
+    Does not attempt to auto-fix.
+    """
+    issues: list[dict] = []
+
+    if not connectors:
+        return issues
+
+    has_unicode_arrows = any(
+        c.char in FULL_ARROW_CHARS for c in connectors
+    )
+    has_ascii_dashes = any(c.char == "-" for c in connectors)
+
+    if has_unicode_arrows and has_ascii_dashes:
+        # Both styles present — report warning
+        line, col = _to_1idx(connectors[0].row, connectors[0].col)
+        issues.append(_issue(
+            line, col, "warning", "style_mix",
+            "Mixed arrow styles: input contains both Unicode arrows "
+            "(→←↑↓) and ASCII dash connectors (potential ASCII arrows like -> or <-)",
+            fixable=False,
+        ))
 
     return issues

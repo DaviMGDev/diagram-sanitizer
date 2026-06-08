@@ -71,19 +71,31 @@ class Grid:
         return f"Grid(height={self.height}, width={self.width})"
 
 
-def classify_connectors(grid: Grid) -> list[ConnectorCell]:
+def classify_connectors(
+    grid: Grid, exempt_regions: set[tuple[int, int]] | None = None
+) -> list[ConnectorCell]:
     """Iterate the grid and identify all connector cells.
 
     Each connector cell is classified with its expected connection
     directions based on the connector map (Appendix A).
 
+    Cells in exempt_regions are skipped (used for markdown table
+    characters that should not be treated as connectors).
+
+    Args:
+        grid: The 2D character grid.
+        exempt_regions: Optional set of (row, col) to skip.
+
     Returns:
         List of ConnectorCell objects in row-major order.
     """
+    exempt = exempt_regions or set()
     connectors: list[ConnectorCell] = []
     for row in range(grid.height):
         line = grid.rows[row]
         for col, char in enumerate(line):
+            if (row, col) in exempt:
+                continue
             cdef = CONNECTOR_MAP.get(char)
             if cdef is not None:
                 connectors.append(

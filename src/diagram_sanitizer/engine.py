@@ -1,11 +1,16 @@
 """Pipeline orchestrator — the sanitize() entry point.
 
-Orchestrates all 11 pipeline stages and produces the JSON report.
+Orchestrates all 12 pipeline stages and produces the JSON report.
 """
 
 from __future__ import annotations
 
 from diagram_sanitizer.preprocessor import preprocess
+from diagram_sanitizer.markdown import (
+    detect_markdown_tables,
+    build_exempt_regions_from_lines,
+    normalize_markdown_table,
+)
 from diagram_sanitizer.grid import Grid, classify_connectors
 from diagram_sanitizer.components import find_components
 from diagram_sanitizer.detectors import (
@@ -14,6 +19,9 @@ from diagram_sanitizer.detectors import (
     detect_box_widths,
     detect_style_mix,
     detect_cross_arrow_circle,
+    detect_missing_sides,
+    detect_overlaps,
+    detect_mixed_arrows,
 )
 from diagram_sanitizer.fixer import apply_fixes
 
@@ -33,7 +41,11 @@ _ID_PREFIX: dict[str, str] = {
     "style_mix": "STYLE",
     "dangling_junction": "DANGL",
     "orphan": "ORPH",
+    "arrow_orphan": "ARRW",
     "missing_side": "SIDE",
+    "overlap": "OVERL",
+    "markdown_table": "MDTBL",
+    "encoding": "ENCOD",
 }
 
 
@@ -64,15 +76,39 @@ def sanitize(diagram: str, options: dict | None = None) -> dict:
     # ── Step 1: Preprocessing ──
     normalized = preprocess(diagram, tab_width=opts["tab_width"])
 
-    # ── Step 2-3: Grid construction + connector classification ──
+    # ── Check for replacement characters (NFR-006) ──
+    if "�" in normalized:
+        all_issues: list[dict] = [
+            {
+                "line": 1,
+                "col": 1,
+                "severity": "warning",
+                "type": "encoding",
+                "message": "Input contains invalid UTF-8 sequences (replaced with U+FFFD)",
+                "fixable": False,
+            }
+        ]
+    else:
+        all_issues = []
+
+    # ── Step 2: Markdown table detection (FR-028) ──
+    lines = normalized.split("\n")
+    detected_tables = detect_markdown_tables(lines)
+    exempt_regions = build_exempt_regions_from_lines(detected_tables, lines)
+
+    # ── Step 3-4: Grid construction + connector classification ──
     grid = Grid(normalized)
-    connectors = classify_connectors(grid)
+    connectors = classify_connectors(grid, exempt_regions=exempt_regions)
 
     # Handle empty / no-connector inputs (EC-001, EC-002, EC-003)
     if not connectors:
+        status = _compute_status(all_issues)
+        for issue in all_issues:
+            prefix = _ID_PREFIX.get(issue["type"], "ISSUE")
+            issue["id"] = f"{prefix}-{issue['line']}-{issue['col']}"
         return {
-            "status": "ok",
-            "issues": [],
+            "status": status,
+            "issues": all_issues,
             "corrected_diagram": None,
         }
 
@@ -80,12 +116,14 @@ def sanitize(diagram: str, options: dict | None = None) -> dict:
     components = find_components(connectors, grid)
 
     # ── Steps 5-9: Detection stages ──
-    all_issues: list[dict] = []
     all_issues.extend(detect_orphans(grid, connectors, components))
     all_issues.extend(detect_gaps(grid, connectors))
     all_issues.extend(detect_box_widths(grid, components))
+    all_issues.extend(detect_missing_sides(grid, components))
     all_issues.extend(detect_style_mix(components))
     all_issues.extend(detect_cross_arrow_circle(grid, connectors, components))
+    all_issues.extend(detect_overlaps(components))
+    all_issues.extend(detect_mixed_arrows(connectors, components))
 
     # ── Deduplicate issues (EC-027) ──
     issues = _deduplicate(all_issues)
@@ -103,6 +141,25 @@ def sanitize(diagram: str, options: dict | None = None) -> dict:
     corrected_diagram = None
     if mode in ("fix", "auto"):
         corrected_diagram = apply_fixes(grid, issues)
+
+    # ── Step 10b: Markdown table normalization (FR-029, FR-030) ──
+    # Runs after diagram fixes so orphan removal doesn't affect table content
+    if detected_tables and corrected_diagram is not None:
+        table_lines = corrected_diagram.split("\n")
+        table_issues: list[dict] = []
+        for table in detected_tables:
+            table_lines, ti = normalize_markdown_table(table_lines, table)
+            table_issues.extend(ti)
+        if table_issues:
+            corrected_diagram = "\n".join(table_lines)
+            # Re-apply IDs to table issues and merge
+            for ti in table_issues:
+                if "id" not in ti:
+                    prefix = _ID_PREFIX.get(ti["type"], "ISSUE")
+                    ti["id"] = f"{prefix}-{ti['line']}-{ti['col']}"
+            issues.extend(table_issues)
+            # Recompute status after adding table issues
+            status = _compute_status(issues)
 
     # ── Step 11: Build report ──
     return {

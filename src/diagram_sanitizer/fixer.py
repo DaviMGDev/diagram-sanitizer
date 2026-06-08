@@ -27,7 +27,7 @@ if TYPE_CHECKING:
 
 # ── Fix application order ────────────────────────────────────────────────────
 
-FIX_ORDER = ["orphan", "gap", "box_width", "style_mix"]
+FIX_ORDER = ["orphan", "arrow_orphan", "gap", "box_width", "style_mix"]
 
 
 def apply_fixes(grid: "Grid", issues: list[dict]) -> str | None:
@@ -60,7 +60,7 @@ def apply_fixes(grid: "Grid", issues: list[dict]) -> str | None:
 
 def _apply_fix_type(grid: "Grid", fix_type: str, issues: list[dict]) -> None:
     """Apply a specific fix type to the grid."""
-    if fix_type == "orphan":
+    if fix_type in ("orphan", "arrow_orphan"):
         _fix_orphans(grid, issues)
     elif fix_type == "gap":
         _fix_gaps(grid, issues)
@@ -126,9 +126,10 @@ def _fix_box_widths(grid: "Grid", issues: list[dict]) -> None:
     """Normalize box borders to match modal width (FR-017).
 
     Strategy:
-    - Determine modal width from all horizontal borders of the box
-    - Extend/shrink top and bottom borders to match
-    - On width ties, use narrower width (conservative)
+    - Collect widths from ALL horizontal borders (top, internal rows with
+      T-junctions, bottom)
+    - Compute modal width (most frequent). On tie, use narrower (conservative)
+    - Normalize all horizontal borders to the modal width
     """
     # Track which boxes we've already processed (by top-left corner)
     processed: set[tuple[int, int]] = set()
@@ -140,36 +141,16 @@ def _fix_box_widths(grid: "Grid", issues: list[dict]) -> None:
             continue
         processed.add((tl_row, tl_col))
 
-        # Parse the message to get widths
-        msg = issue["message"]
-        # "Box width mismatch: top border spans X cell(s), bottom border spans Y cell(s)"
-        import re as _re
-        nums = _re.findall(r"(\d+)", msg)
-        if len(nums) < 2:
-            continue
-
-        top_w = int(nums[0])
-        bottom_w = int(nums[1])
-
-        # Modal width: use the narrower on tie (FR-017)
-        # For a simple top-vs-bottom mismatch, use the one that matches the most internal rows
-        # For now, use max width (extend to wider) as a reasonable default
-        # Then apply tie-breaker: narrower wins on tie
-        if top_w == bottom_w:
-            continue  # No mismatch
-
-        target_width = max(top_w, bottom_w)  # FIX later
-
         # Find the box corners in the grid
         tl_char = grid.get(tl_row, tl_col)
         if tl_char not in ("┌", "╔"):
             continue
 
         # Find top-right corner
-        tr_col = tl_col + top_w + 1
-        tr_char = grid.get(tl_row, tr_col)
-        if tr_char not in ("┐", "╗"):
+        tr_col = _find_matching_right_corner(grid, tl_row, tl_col, tl_char)
+        if tr_col is None:
             continue
+        top_w = tr_col - tl_col - 1
 
         # Find bottom-left corner
         bl_row = None
@@ -182,34 +163,103 @@ def _fix_box_widths(grid: "Grid", issues: list[dict]) -> None:
             continue
 
         # Find bottom-right corner
-        br_col = tl_col + bottom_w + 1
-        br_char = grid.get(bl_row, br_col)
-        if br_char not in ("┘", "╝"):
+        br_col = _find_matching_right_corner(grid, bl_row, tl_col, grid.get(bl_row, tl_col))
+        if br_col is None:
+            continue
+        bottom_w = br_col - tl_col - 1
+
+        # ── Collect all horizontal border widths (FR-017) ──
+        # Include top, bottom, and any internal separator rows
+        # (rows with T-junctions at the left column, e.g., ├──┤ or ╠══╣)
+        widths: dict[int, int] = {}  # width -> count
+        # Top
+        widths[top_w] = widths.get(top_w, 0) + 1
+        # Bottom
+        widths[bottom_w] = widths.get(bottom_w, 0) + 1
+        # Internal separator rows
+        for r in range(tl_row + 1, bl_row):
+            ch = grid.get(r, tl_col)
+            if ch in ("├", "╠"):
+                irc = _find_matching_right_corner(grid, r, tl_col, ch)
+                if irc is not None:
+                    w = irc - tl_col - 1
+                    widths[w] = widths.get(w, 0) + 1
+
+        if not widths:
             continue
 
-        # Normalize: extend or shrink bottom border to match target width
-        # Extend bottom: add ─ between └ and ┘
-        if bottom_w < target_width:
-            # Fill the whole bottom border range (including old ┘ position)
-            for fill_c in range(tl_col + 1, tl_col + target_width + 1):
-                grid.set(bl_row, fill_c, "─")
-            # Move ┘ to correct position
-            grid.set(bl_row, tl_col + target_width + 1, tr_char.replace("╗", "╝").replace("┐", "┘"))
-        elif bottom_w > target_width:
-            # Shrink bottom: remove extra cells and move ┘ left
-            for c in range(tl_col + target_width + 1, br_col + 1):
-                grid.set(bl_row, c, " ")
-            grid.set(bl_row, tl_col + target_width + 1, tr_char.replace("╗", "╝").replace("┐", "┘"))
+        # Compute modal width; on tie, use narrower (FR-017)
+        max_count = max(widths.values())
+        candidates = [w for w, c in widths.items() if c == max_count]
+        target_width = min(candidates)  # narrower wins on tie
 
-        # Also fix top if needed
-        if top_w < target_width:
-            for fill_c in range(tl_col + 1, tl_col + target_width + 1):
-                grid.set(tl_row, fill_c, "─")
-            grid.set(tl_row, tl_col + target_width + 1, tr_char)
-        elif top_w > target_width:
-            for c in range(tl_col + target_width + 1, tr_col + 1):
-                grid.set(tl_row, c, " ")
-            grid.set(tl_row, tl_col + target_width + 1, tr_char)
+        if all(w == target_width for w in widths):
+            continue  # Already consistent
+
+        # ── Normalize all borders to target width ──
+        is_double = tl_char in ("╔", "╗")
+        h_line = "═" if is_double else "─"
+        right_corner_map = {
+            "┌": "┐", "╔": "╗",
+            "├": "┤", "╠": "╣",
+            "└": "┘", "╚": "╝",
+        }
+
+        # Fix top border
+        _normalize_border(
+            grid, tl_row, tl_col, tr_col, target_width, h_line,
+            right_corner_map.get(tl_char, "┐")
+        )
+
+        # Fix bottom border
+        bl_char = grid.get(bl_row, tl_col)
+        _normalize_border(
+            grid, bl_row, tl_col, br_col, target_width, h_line,
+            right_corner_map.get(bl_char, "┘")
+        )
+
+        # Fix internal separator rows
+        for r in range(tl_row + 1, bl_row):
+            ch = grid.get(r, tl_col)
+            if ch in ("├", "╠"):
+                irc = _find_matching_right_corner(grid, r, tl_col, ch)
+                if irc is not None and irc - tl_col - 1 != target_width:
+                    _normalize_border(
+                        grid, r, tl_col, irc, target_width, h_line,
+                        right_corner_map.get(ch, "┤")
+                    )
+
+
+def _find_matching_right_corner(
+    grid: "Grid", row: int, left_col: int, left_char: str
+) -> int | None:
+    """Find the matching right-side corner on the same row."""
+    right_chars = {"┌": "┐", "╔": "╗", "├": "┤", "╠": "╣", "└": "┘", "╚": "╝"}
+    expected_right = right_chars.get(left_char)
+    if expected_right is None:
+        return None
+    for c in range(left_col + 1, grid.width):
+        ch = grid.get(row, c)
+        if ch == expected_right:
+            return c
+    return None
+
+
+def _normalize_border(
+    grid: "Grid", row: int, left_col: int, old_right_col: int | None,
+    target_width: int, h_line: str, right_corner: str
+) -> None:
+    """Normalize a single horizontal border to target_width."""
+    # Clear existing border cells and right corner
+    if old_right_col is not None:
+        for c in range(left_col + 1, old_right_col + 1):
+            grid.set(row, c, " ")
+
+    # Draw new border at target width
+    new_right_col = left_col + target_width + 1
+    for c in range(left_col + 1, new_right_col):
+        grid.set(row, c, h_line)
+    grid.set(row, new_right_col, right_corner)
 
 
 # ── 4. Style unification ─────────────────────────────────────────────────────
