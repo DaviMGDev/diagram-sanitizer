@@ -25,7 +25,7 @@ def _read_input(file_arg: str | None) -> str:
     if file_arg == "-":
         return sys.stdin.read()
     if file_arg is not None:
-        with open(file_arg, encoding="utf-8") as f:
+        with open(file_arg, encoding="utf-8", errors="replace") as f:
             return f.read()
     # file_arg is None — Click will have already shown help if stdin is a TTY,
     # but if we reach here stdin is a pipe
