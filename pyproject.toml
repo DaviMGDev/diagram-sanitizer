@@ -29,6 +29,7 @@ das = "diagram_sanitizer.cli:main"
 
 [project.optional-dependencies]
 dev = ["pytest>=8"]
+cli = ["wcwidth>=0.2"]
 
 [build-system]
 requires = ["hatchling"]
