@@ -95,18 +95,18 @@ class TestApplyFixes:
         assert bottom.startswith("└─")
 
     def test_box_width_normalization(self):
-        """FR-017: Box border normalized."""
-        # Wide top, narrow bottom
-        grid = Grid("┌───┐\n│ X │\n└─┘")
+        """FR-017: Box border normalized — modal width with conservative tie-breaking."""
+        # Top=3, internal row=3, bottom=1 → modal=3 unambiguous (count 2 vs 1)
+        grid = Grid("┌───┐\n├───┤\n│ X │\n└─┘")
         issues = [
             {"type": "box_width", "line": 1, "col": 1, "fixable": True,
              "severity": "error",
              "message": "Box width mismatch: top border spans 3 cell(s), bottom border spans 1 cell(s)",
              "fix_suggestion": "Normalize box width to 3",
-             "end_line": 3, "end_col": 4},
+             "end_line": 4, "end_col": 4},
         ]
         result = apply_fixes(grid, issues)
-        # Bottom should now span same width as top
+        # Bottom should now span same width as top (modal width = 3)
         assert "└───┘" in result
 
     def test_style_unification(self):

@@ -58,15 +58,15 @@ class TestOrphanDetection:
         """EC-018: arrow head ▶ with no ─ to its left."""
         grid, connectors, components = _analyze("text ▶\n")
         issues = detect_orphans(grid, connectors, components)
-        # Arrow head is a strict orphan
-        assert any(i["type"] == "orphan" and "arrow" in i["message"].lower()
+        # Arrow head is a strict orphan — now reported as arrow_orphan type
+        assert any(i["type"] == "arrow_orphan" and "arrow" in i["message"].lower()
                    for i in issues)
 
     def test_isolated_full_arrow(self):
         """EC-029: full arrow → with no connections."""
         grid, connectors, components = _analyze("text → text\n")
         issues = detect_orphans(grid, connectors, components)
-        assert any(i["type"] == "orphan" and "arrow" in i["message"].lower()
+        assert any(i["type"] == "arrow_orphan" and "arrow" in i["message"].lower()
                    for i in issues)
 
     def test_valid_box_no_orphans(self):

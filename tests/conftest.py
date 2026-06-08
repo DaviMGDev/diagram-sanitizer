@@ -202,3 +202,39 @@ def three_sided_box():
 def overlapping_components():
     """Two components that share cells."""
     return "┌───┐\n│┌─┐│\n│└─┘│\n└───┘\n"
+
+
+@pytest.fixture
+def cjk_diagram():
+    """Diagram with CJK full-width characters."""
+    return "┌──┐\n│日本語│\n└──┘\n"
+
+
+@pytest.fixture
+def simple_markdown_table():
+    """A simple GFM markdown table."""
+    return "| A | B |\n|---|---|\n| 1 | 2 |\n"
+
+
+@pytest.fixture
+def markdown_table_no_separator():
+    """A markdown table missing its separator row."""
+    return "| A | B |\n| 1 | 2 |\n"
+
+
+@pytest.fixture
+def markdown_table_uneven_columns():
+    """A markdown table with uneven column counts."""
+    return "| A | B | C |\n|---|---|\n| 1 | 2 |\n"
+
+
+@pytest.fixture
+def mixed_arrow_styles():
+    """Diagram mixing Unicode arrows with ASCII dash connectors."""
+    return "┌──┐ → ┌──┐\n└──┘ -  └──┘\n"
+
+
+@pytest.fixture
+def invalid_utf8_bytes():
+    """Invalid UTF-8 bytes for testing error handling."""
+    return b'\xff\xfe\xfd'
