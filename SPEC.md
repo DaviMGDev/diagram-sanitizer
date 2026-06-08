@@ -1,7 +1,7 @@
 # SPEC.md — ASCII Diagram Sanitizer
 
-**Version:** 1.2  
-**Date:** 2026-06-07  
+**Version:** 1.3  
+**Date:** 2026-06-08  
 **Status:** Draft
 
 ---
@@ -100,6 +100,29 @@ interrupt the expected connection path between two connectors. A gap of
 exactly 1 empty cell is **auto-fixable** when the line character to fill it
 is unambiguous.
 
+### Markdown Table
+
+A **markdown table** is a contiguous block of lines that follows the
+GitHub-Flavored Markdown (GFM) table syntax:
+
+- Lines are separated by `\n`, with one table row per line.
+- Each row contains one or more `|` (U+007C VERTICAL LINE) characters acting
+  as column separators.
+- The second line (separator row) contains only `|`, `-` (U+002D HYPHEN-MINUS),
+  `:` (optional alignment markers), and whitespace.
+- Leading and trailing `|` characters on each row are optional but common.
+- A block is identified as a markdown table when **at least two consecutive rows**
+  match the table row pattern, and the second row is a separator row.
+
+Markdown tables are **not diagram structures**. The `|`, `-`, and `:`
+characters within an identified markdown table block are **exempted from
+connector classification** — they are preserved as table formatting, not
+treated as diagram connectors.
+
+When a markdown table is identified, the system MAY optionally normalize its
+column widths (see FR-029). The table content (cell text) is always preserved
+unchanged.
+
 ---
 
 ## User Stories
@@ -194,6 +217,27 @@ is unambiguous.
   MUST print the help message and exit with code `0`. The CLI MUST print the
   JSON report to stdout and exit with code `0` (ok), `1` (warnings), or
   `2` (errors).
+
+### From US-004 (Markdown Table Awareness)
+
+- **AC-019:** WHEN the input contains a valid markdown table block, THE
+  system MUST recognize it as a markdown table and MUST NOT treat `|`, `-`,
+  or `:` characters within the table as diagram connectors. These characters
+  MUST be preserved as-is in `corrected_diagram` (they are table formatting,
+  not diagram lines).
+- **AC-020:** WHEN a markdown table has misaligned columns (cells of unequal
+  widths across rows), THE system MUST report an `info`-severity issue and
+  MUST normalize the column widths in `corrected_diagram` by adding trailing
+  spaces to shorter cells. The separator row dashes MUST also be padded to
+  match the column width.
+- **AC-021:** WHEN a markdown table has a missing, malformed, or misaligned
+  separator row (the `|---|---|` line), THE system MUST report a `warning`
+  and MUST insert or normalize the separator row in `corrected_diagram` to
+  match the column count and widths of the data rows.
+- **AC-022:** WHEN a line matches the GFM table row pattern but is not part
+  of a contiguous multi-row table block (isolated single row), THE system
+  MUST NOT treat it as a markdown table — it falls through to normal
+  connector classification.
 
 ---
 
@@ -302,32 +346,68 @@ is unambiguous.
   as-is. The system does not perform semantic text-vs-diagram classification;
   users processing files with connector characters in prose should isolate
   diagram sections beforehand.
+- **FR-028:** The system MUST detect markdown table blocks before connector
+  classification (during or immediately after preprocessing). A block is
+  identified as a markdown table when it meets all of:
+  1. At least **two consecutive rows** that each contain one or more `|`
+     characters with non-empty cell content between or around them.
+  2. The **second row** of the block (the separator row) consists entirely
+     of `|`, `-`, `:`, and whitespace.
+  3. All rows in the block have the same number of `|`-delimited columns.
+- **FR-029:** When a markdown table is identified, the system MUST:
+  1. **Exempt** all `|`, `-`, and `:` characters within the table block from
+     connector classification — they are preserved as table formatting.
+  2. **Normalize** column widths by computing the maximum content width per
+     column across all rows, then padding each cell with trailing spaces to
+     match the column width. The separator row `-` sequences MUST also be
+     padded to the column width (preserving any `:` alignment markers at
+     the start or end of the dash sequence).
+  3. **Preserve** all cell content text unchanged (only whitespace padding
+     is added).
+- **FR-030:** When a markdown table has a missing or malformed separator row,
+  the system MUST:
+  1. Report an issue at `warning` severity.
+  2. In `corrected_diagram`, insert or rewrite the separator row with the
+     correct number of columns. Each separator cell MUST be at least three
+     dashes (`---`) and MUST be padded to match the column width.
+- **FR-031:** The system MUST distinguish between `|` characters inside a
+  markdown table block (preserved as formatting) and `|` characters outside
+  such blocks (treated as ASCII vertical line connectors per Appendix A). A
+  `|` that is not part of a recognized markdown table follows the standard
+  connector classification and orphan detection rules.
 - **FR-027:** The system MUST process the diagram in the following pipeline
   order:
   1. **Preprocessing**: BOM stripping (EC-025), ANSI escape removal (EC-026),
      tab expansion (EC-009), line-ending normalization (FR-002), trailing
      whitespace trimming (EC-011).
-  2. **Grid construction**: Parse normalized input into a 2D character grid
+  2. **Markdown table detection**: Identify contiguous GFM table blocks in the
+     preprocessed input (FR-028). Exempt `|`, `-`, and `:` within identified
+     table blocks from subsequent connector classification. Record table
+     boundaries for column-width normalization during fix application.
+  3. **Grid construction**: Parse normalized input into a 2D character grid
      (FR-003).
-  3. **Connector classification**: Classify every cell as connector or
-     non-connector (FR-004).
-  4. **Connected component analysis**: Cluster connectors into connected
+  4. **Connector classification**: Classify every cell (outside markdown
+     table blocks) as connector or non-connector (FR-004).
+  5. **Connected component analysis**: Cluster connectors into connected
      components using the adjacency and connectivity rules (Definitions).
-  5. **Orphan detection**: Identify fully isolated orphans and component
+  6. **Orphan detection**: Identify fully isolated orphans and component
      orphans (FR-008, FR-009).
-  6. **Gap detection**: Ray-cast from each connector along expected
+  7. **Gap detection**: Ray-cast from each connector along expected
      directions to find gaps (FR-007).
-  7. **Box analysis**: Identify boxes and detect width mismatches (FR-012,
+  8. **Box analysis**: Identify boxes and detect width mismatches (FR-012,
      AC-003).
-  8. **Style analysis**: Detect mixed single/double-line within components
+  9. **Style analysis**: Detect mixed single/double-line within components
      (FR-013).
-  9. **Cross/arrow/circle validation**: Check crosses, arrow heads, circles
-     (FR-021, AC-005, AC-006).
-  10. **Fix application**: Apply unambiguous fixes in order: orphan removal →
-      gap fill → box normalization → style unification (FR-016–018,
-      FR-010). Orphan removal runs first so that gaps pointing at
-      orphaned cells do not trigger spurious gap fills.
-  11. **Output generation**: Produce JSON report and corrected diagram
+  10. **Cross/arrow/circle validation**: Check crosses, arrow heads, circles
+      (FR-021, AC-005, AC-006).
+  11. **Fix application**: Apply unambiguous fixes in order: orphan removal →
+      gap fill → box normalization → style unification → markdown table
+      normalization (FR-016–018, FR-010, FR-029). Orphan removal runs
+      first so that gaps pointing at orphaned cells do not trigger spurious
+      gap fills. Markdown table normalization runs last so that table
+      content from earlier fixes (e.g., orphan removal of diagram fragments
+      near a table) does not affect column-width calculations.
+  12. **Output generation**: Produce JSON report and corrected diagram
       (FR-015, FR-025).
 
 ---
@@ -411,6 +491,7 @@ CI integration.
 | `orphan` | `ORPH` |
 | `missing_side` | `SIDE` |
 | `arrow_orphan` | `ARRW` |
+| `markdown_table` | `MDTBL` |
 
 The `end_line` and `end_col` fields are present for multi-cell issues:
 - **Box-width mismatches** — span of the box borders
@@ -457,6 +538,9 @@ Single-cell issues (fully isolated orphans, single-cell gaps) do not include
 | EC-028 | Diagram consists entirely of `─` or `│` characters with no junctions, corners, or arrow heads | Report as `orphan` (each disconnected segment is an orphan); remove all in `corrected_diagram` |
 | EC-029 | An orphaned full arrow (`→`, `←`, `↑`, `↓`) with no connectors on either expected side | Report as `orphan` (severity: `error`); remove in `corrected_diagram`. Same as other fully isolated orphans. |
 | EC-030 | A connected component mixes Unicode box-drawing characters (`┌─┐│└┘`) with ASCII equivalents (`+`, `-`, `\|`) | Report as `info` — the component uses two styles for the same structural purpose. Do not attempt to unify automatically (the conversion is lossy: `+` could be a cross or a corner). |
+| EC-031 | A valid markdown table block containing `|` and `-` characters | Do NOT treat `|` or `-` within the table block as diagram connectors. Exempt them from connector classification. Preserve them as-is in `corrected_diagram`. Normalize column widths (FR-029). |
+| EC-032 | A markdown table with a missing or malformed separator row (e.g., a `|` data row directly followed by another `|` data row with no `|---|` row between them) | Report as `warning` (`MDTBL` type). Insert or rewrite the separator row in `corrected_diagram` with the correct number of columns and padded dashes matching column widths. |
+| EC-033 | A markdown table with inconsistent column counts across rows (e.g., row 1 has 3 columns, row 2 has 4 columns) | Report as `warning`. Normalize to the maximum column count. Rows with fewer columns get empty cells appended. Rows with extra columns beyond a reasonable threshold MAY be flagged as ambiguous. |
 
 ---
 
@@ -490,10 +574,10 @@ Single-cell issues (fully isolated orphans, single-cell gaps) do not include
 The analysis proceeds in the following fixed order (as defined in FR-027):
 
 ```
-Preprocessing → Grid Construction → Connector Classification →
-Connected Component Analysis → Orphan Detection → Gap Detection →
-Box Analysis → Style Analysis → Cross/Arrow/Circle Validation →
-Fix Application → Output Generation
+Preprocessing → Markdown Table Detection → Grid Construction →
+Connector Classification → Connected Component Analysis →
+Orphan Detection → Gap Detection → Box Analysis → Style Analysis →
+Cross/Arrow/Circle Validation → Fix Application → Output Generation
 ```
 
 Key properties of the pipeline:
@@ -579,6 +663,12 @@ connection directions:
 | `+` | ASCII junction | Any cardinal direction |
 | `-` | ASCII horizontal | Left and/or Right (at least one side; endpoints are valid) |
 | `\|` | ASCII vertical | Above and/or Below (at least one side; endpoints are valid) |
+
+> **Markdown table exception:** When `|`, `-`, or `:` characters appear
+> inside a recognized markdown table block (see FR-028), they are exempted
+> from connector classification and are NOT treated as diagram connectors.
+> They are preserved as table formatting characters. Only `|`, `-`, and `:`
+> outside markdown table blocks are subject to the connector rules above.
 
 For each direction a connector expects, the tool traces outward cell-by-cell
 until it either hits another connector (connection satisfied) or empty space
